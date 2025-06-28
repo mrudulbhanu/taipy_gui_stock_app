@@ -2,11 +2,179 @@ import taipy as  tp
 import taipy.gui.builder as tgb
 from taipy.gui import Icon
 from taipy import Config
+import datetime
+import pandas as pd
+import plotly.graph_objects as go
+company_data = pd.read_csv("data/sp500_companies.csv")
+stock_data = pd.read_csv("data/sp500_stocks.csv")
+stock_data=stock_data.dropna(subset=["Adj Close"])
+country_names = company_data["Country"].unique().tolist()
+country_names = [(name, Icon("images/flags/"+name+".png", name)) for name in country_names]
+
+
+company_names = company_data[
+    ["Symbol", "Shortname"]
+    ].sort_values("Shortname").values.tolist()
+dates= [
+    datetime.date(2013,1,1),
+    datetime.date(2024,1,1)
+    ]
+country = "Canada"
+company = "Wayne Enterprise"
+
+graph_data = None
+figure = None
+
+lin_pred = 0
+knn_pred = 0
+rnn_pred = 0
 
 with tgb.Page() as page:
-    tgb.image("images/icons/logo.png")
-    tgb.text("S&P stock value over time", mode = "md")
-    
+    with tgb.part("text-center"):
+        tgb.image("images/icons/logo.png",width = "10vw")
+        tgb.text(
+            "## S&P stock value over time", 
+            mode = "md"
+            )
+        tgb.date_range( 
+            "{dates}",
+            label_start = "Start Date",
+            label_end = "End Date"
+        )
+    with tgb.layout("20 80"):
+        tgb.selector(
+            label = "Country",
+            class_name = "fullwidth",
+            value="{country}",
+            lov = "{country_names}",
+                dropdown = True,
+                value_by_id=True
+        )
+        tgb.selector(
+            label = "Company",
+            class_name = "fullwidth",
+            value="{company}",
+            lov = "{company_names}",
+                dropdown = True,
+                value_by_id=True
+        )
+    tgb.chart(figure = "{figure}")
+    with tgb.part("text-left"):
+        with tgb.layout( " 4 72 4 4 4 4 4 4 "):
+            tgb.image(
+                "images/icons/id-card.png",
+                width = "3vw"
+            )
+            tgb.text ( "{company}",mode = "md")
+            tgb.image(
+                "images/icons/lin.png",
+                width = "3vw"
+            )
+            tgb.text ( "{lin_pred}",mode = "md")
+            tgb.image(
+                "images/icons/knn.png",
+                width = "3vw"
+            )
+            tgb.text ( "{knn_pred}",mode = "md")
+            tgb.image(
+                "images/icons/rnn.png",
+                width = "3vw"
+            )
+            tgb.text ( "{rnn_pred}",mode = "md")
+
+
+def build_company_names(country):
+    company_names = company_data[
+    ["Symbol", "Shortname"]][
+        company_data["Country"]==country
+    ].sort_values("Shortname").values.tolist()
+    return company_names
+
+def build_graph_data(dates, company):
+    graph_data=stock_data[["Date", "Adj Close"]][
+            (stock_data["Symbol"]==company) &
+            (stock_data["Date"] > str(dates[0]) ) & 
+            (stock_data["Date"] < str (dates[1]))
+                ]
+    graph_data = graph_data.rename(columns = {
+        "Adj Close" :  company
+    })
+    print(company)
+    print(graph_data)
+    return graph_data
+
+def display_graph(graph_data):
+    figure = go.Figure()
+    figure.add_trace(go.Scatter(
+        x=graph_data["Date"],
+        y=graph_data[graph_data.columns[-1]],
+        name = graph_data.columns[-1],
+        showlegend=True
+    ))
+    figure.update_layout(
+        xaxis_title = "Date",
+        yaxis_title = "Stock Value"
+    )
+
+
+def on_change(state, name, value):
+    if name == "country":
+        state.scenario.country.write(state.country)
+        state.scenario.submit(wait=True)
+        state.company_names = state.scenario.company_names.read()
+    if name == "company":
+        state.scenario.dates.write(state.dates)
+        state.scenario.company.write(state.company)
+        state.scenario.submit(wait=True)
+        state.graph_data = state.scenario.graph_data.read()
+    if name == "graph_data":
+        state.figure = display_graph(state.graph_data)
+
+
+
+country_cfg=Config.configure_data_node(
+    id="country"
+    )
+company_names_cfg=Config.configure_data_node(
+    id="company_names"
+    )
+
+dates_cfg=Config.configure_data_node(
+    id="dates"
+    )
+company_cfg=Config.configure_data_node(
+    id="company"
+    )
+graph_data_cfg=Config.configure_data_node(
+    id="graph_data"
+    )
+
+
+build_company_names_cfg= Config.configure_task(
+    input = country_cfg,
+    output = company_names_cfg,
+    function = build_company_names,
+    id = "build_company_name",
+    skippable = True
+)
+
+
+build_graph_data_cfg= Config.configure_task(
+    input = [dates_cfg, company_cfg],
+    output = graph_data_cfg,
+    function = build_graph_data,
+    id = "build_graph_data",
+    skippable = True
+)
+
+scenario_cfg = Config.configure_scenario(
+    task_configs=[build_company_names_cfg,
+                  build_graph_data_cfg],
+    id = "scenario"
+)
+
 if __name__ == "__main__":
+    tp.Orchestrator().run()
+    scenario = tp.create_scenario(scenario_cfg)
     gui = tp.Gui(page)
     gui.run(title="S&P Stock Value", use_reloader=True)
