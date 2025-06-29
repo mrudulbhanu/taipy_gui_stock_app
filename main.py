@@ -5,7 +5,11 @@ from taipy import Config
 import datetime
 import pandas as pd
 import plotly.graph_objects as go
-
+from sklearn.linear_model import LinearRegression
+from sklearn.neighbors import KNeighborsRegressor
+from tensorflow.keras import models
+from tensorflow.keras import layers
+import numpy as np
 
 company_data = pd.read_csv("data/sp500_companies.csv")
 stock_data = pd.read_csv("data/sp500_stocks.csv")
@@ -26,7 +30,7 @@ dates= [
     datetime.date(2024,1,1)
     ]
 country = "United States"
-company = [['AOS', 'A.O. Smith Corporation']]
+company = ['AOS']
 graph_data = None
 figure = None
 
@@ -65,7 +69,6 @@ with tgb.Page() as page:
                 value_by_id=True,
                 multiple = True
         )
-        print(company)
     tgb.chart(figure = "{figure}")
     with tgb.part("text-left"):
         with tgb.layout( " 4 72 4 4 4 4 4 4 "):
@@ -73,7 +76,7 @@ with tgb.Page() as page:
                 "images/icons/id-card.png",
                 width = "3vw"
             )
-            tgb.text ( "{company}",mode = "md")
+            tgb.text ( "{company[-1]}",mode = "md")
             tgb.image(
                 "images/icons/lin.png",
                 width = "3vw"
@@ -101,20 +104,15 @@ def build_company_names(country):
         ["Symbol", "Shortname"]][
             company_data["Country"]==country
         ].sort_values("Shortname").values.tolist()
-        print(company_names)
     return company_names
 
 def build_graph_data(dates, company):
-    print(company)
     temp_data = stock_data[["Date","Adj Close", "Symbol"]][
             (stock_data["Date"] > str(dates[0]) ) & 
             (stock_data["Date"] < str (dates[1]))&
             (stock_data["Symbol"].isin(company))
                 ]
     graph_data = temp_data["Date"]
-    # graph_data["Date"] =temp_data["Date"].unique()
-    print(company[0])
-
     for i in company:
         graph_data_temp = pd.DataFrame()
         tempdf= temp_data[temp_data["Symbol"]==i]
@@ -139,19 +137,80 @@ def display_graph(graph_data):
     )
     return figure
 
+def split_data(stock_data, dates, symbols):
+    temp_data = stock_data[
+            (stock_data["Date"] > str(dates[0]) ) & 
+            (stock_data["Date"] < str (dates[1]))&
+            (stock_data["Symbol"]==symbols)
+                ].drop(["Date", "Symbol"], axis=1)
+    eval_features = temp_data.values[-1]
+    eval_features = eval_features.reshape(1, -1)
+    features = temp_data.values[:-1]
+    targets= temp_data["Adj Close"].shift(-1).values[:-1]
+    mean = features.mean(axis=0)
+    std = features.std(axis=0)
+    features = (features - mean) / std
+    eval_features = (eval_features - mean) / std
+    return features, targets, eval_features
+
+def get_lin(dates, company):
+    print(company[-1])
+    x, y, eval_x = split_data(stock_data, dates, company[-1])
+    lin_model.fit(x, y)
+    lin_pred = lin_model.predict(eval_x)
+    return round(lin_pred[0],3)
+
+def get_knn(dates, company):
+    print(company)
+    x, y, eval_x = split_data(stock_data, dates, company[-1])
+    knn_model.fit(x, y)
+    knn_pred = knn_model.predict(eval_x)
+    return round(knn_pred[0],3)
+
+def get_rnn(dates, company):
+    print(company)
+    x, y, eval_x = split_data(stock_data, dates, company[-1])
+    # x=np.reshape(x, ( x.shape[0], x.shape[1]), 1)  # Reshape for RNN input
+    print(x)
+    rnn_model.fit(x, y, batch_size=32, epochs=10, verbose=0)
+    rnn_pred = rnn_model.predict(eval_x)
+    print(type(rnn_pred[0][0]))
+    return round(float(rnn_pred[0][0]),3)
+
+def on_init(state, name, value):
+    state.scenario.country.write(state.country)
+    state.scenario.dates.write(state.dates)
+    state.scenario.company.write(state.company)
+    state.scenario.submit(wait=True)
+    state.graph_data = state.scenario.graph_data.read()
+    state.company_names = state.scenario.company_names.read()
+    state.lin_pred = state.scenario.lin_pred.read()
+    state.knn_pred = state.scenario.knn_pred.read()
+    state.rnn_pred = state.scenario.rnn_pred.read()
+
 def on_change(state, name, value):
     if name == "country":
         state.scenario.country.write(state.country)
         state.scenario.submit(wait=True)
         state.company_names = state.scenario.company_names.read()
-    if name == "company":
+    if name == "company" or name == "dates":
         state.scenario.dates.write(state.dates)
         state.scenario.company.write(state.company)
         state.scenario.submit(wait=True)
         state.graph_data = state.scenario.graph_data.read()
+        state.lin_pred = state.scenario.lin_pred.read()
+        state.knn_pred = state.scenario.knn_pred.read()
+        state.rnn_pred = state.scenario.rnn_pred.read()
     if name == "graph_data":
         state.figure = display_graph(state.graph_data)
 
+def build_RNN(n_features):
+    model = models.Sequential()
+    model.add(layers.Dense(64, activation='relu', input_shape=(n_features,)))
+    model.add(layers.Dense(64, activation='relu'))
+    model.add(layers.Dense(1, activation='linear'))
+    model.compile(optimizer='rmsprop', loss='mse', metrics=['mae'])
+    return model
 
 
 country_cfg=Config.configure_data_node(
@@ -169,6 +228,15 @@ company_cfg=Config.configure_data_node(
     )
 graph_data_cfg=Config.configure_data_node(
     id="graph_data"
+    )
+lin_pred_cfg=Config.configure_data_node(
+    id="lin_pred"
+    )
+knn_pred_cfg=Config.configure_data_node(
+    id="knn_pred"
+    )
+rnn_pred_cfg=Config.configure_data_node(
+    id="rnn_pred"
     )
 
 
@@ -189,13 +257,41 @@ build_graph_data_cfg= Config.configure_task(
     skippable = True
 )
 
+get_lin_cfg= Config.configure_task(
+    input = [dates_cfg, company_cfg],
+    output = lin_pred_cfg,
+    function = get_lin,
+    id = "get_lin",
+    skippable = True
+)
+get_knn_cfg= Config.configure_task(
+    input = [dates_cfg, company_cfg],
+    output = knn_pred_cfg,
+    function = get_knn,
+    id = "get_knn",
+    skippable = True
+)
+get_rnn_cfg= Config.configure_task(
+    input = [dates_cfg, company_cfg],
+    output = rnn_pred_cfg,
+    function = get_rnn,
+    id = "get_rnn",
+    skippable = True
+)
+
 scenario_cfg = Config.configure_scenario(
     task_configs=[build_company_names_cfg,
-                build_graph_data_cfg],
+                build_graph_data_cfg,
+                get_lin_cfg,
+                get_knn_cfg,
+                get_rnn_cfg],
     id = "scenario"
 )
 
 if __name__ == "__main__":
+    lin_model = LinearRegression()
+    knn_model = KNeighborsRegressor(n_neighbors=5)
+    rnn_model = build_RNN(6)
     tp.Orchestrator().run()
     scenario = tp.create_scenario(scenario_cfg)
     gui = tp.Gui(page)
