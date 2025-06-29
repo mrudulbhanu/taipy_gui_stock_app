@@ -5,23 +5,28 @@ from taipy import Config
 import datetime
 import pandas as pd
 import plotly.graph_objects as go
+
+
 company_data = pd.read_csv("data/sp500_companies.csv")
 stock_data = pd.read_csv("data/sp500_stocks.csv")
-stock_data=stock_data.dropna(subset=["Adj Close"])
+stock_data['Adj Close'] = pd.to_numeric(stock_data['Adj Close'], errors='coerce')
+stock_data.dropna(subset=['Adj Close'], inplace=True)
 country_names = company_data["Country"].unique().tolist()
 country_names = [(name, Icon("images/flags/"+name+".png", name)) for name in country_names]
-
-
+country_names.insert(0, ("All Countries", Icon("images/flags/all.png", "All Countries")))
+company_symbols_stock_data= set(stock_data["Symbol"].unique().tolist())
+company_data= company_data[company_data["Symbol"].isin(company_symbols_stock_data)]
 company_names = company_data[
     ["Symbol", "Shortname"]
     ].sort_values("Shortname").values.tolist()
+
+#################contsants######################
 dates= [
     datetime.date(2013,1,1),
     datetime.date(2024,1,1)
     ]
-country = "Canada"
-company = "Wayne Enterprise"
-
+country = "United States"
+company = [['AOS', 'A.O. Smith Corporation']]
 graph_data = None
 figure = None
 
@@ -50,14 +55,17 @@ with tgb.Page() as page:
                 dropdown = True,
                 value_by_id=True
         )
+        
         tgb.selector(
             label = "Company",
             class_name = "fullwidth",
             value="{company}",
             lov = "{company_names}",
                 dropdown = True,
-                value_by_id=True
+                value_by_id=True,
+                multiple = True
         )
+        print(company)
     tgb.chart(figure = "{figure}")
     with tgb.part("text-left"):
         with tgb.layout( " 4 72 4 4 4 4 4 4 "):
@@ -84,38 +92,52 @@ with tgb.Page() as page:
 
 
 def build_company_names(country):
-    company_names = company_data[
-    ["Symbol", "Shortname"]][
-        company_data["Country"]==country
-    ].sort_values("Shortname").values.tolist()
+    if country == "All Countries":
+        company_names = company_data[
+            ["Symbol", "Shortname"]].sort_values("Shortname").values.tolist()
+        return company_names               
+    else:
+        company_names = company_data[
+        ["Symbol", "Shortname"]][
+            company_data["Country"]==country
+        ].sort_values("Shortname").values.tolist()
+        print(company_names)
     return company_names
 
 def build_graph_data(dates, company):
-    graph_data=stock_data[["Date", "Adj Close"]][
-            (stock_data["Symbol"]==company) &
-            (stock_data["Date"] > str(dates[0]) ) & 
-            (stock_data["Date"] < str (dates[1]))
-                ]
-    graph_data = graph_data.rename(columns = {
-        "Adj Close" :  company
-    })
     print(company)
-    print(graph_data)
+    temp_data = stock_data[["Date","Adj Close", "Symbol"]][
+            (stock_data["Date"] > str(dates[0]) ) & 
+            (stock_data["Date"] < str (dates[1]))&
+            (stock_data["Symbol"].isin(company))
+                ]
+    graph_data = temp_data["Date"]
+    # graph_data["Date"] =temp_data["Date"].unique()
+    print(company[0])
+
+    for i in company:
+        graph_data_temp = pd.DataFrame()
+        tempdf= temp_data[temp_data["Symbol"]==i]
+        graph_data_temp["Date"]=tempdf["Date"]
+        graph_data_temp[i]=tempdf["Adj Close"]
+        graph_data = pd.concat([graph_data, graph_data_temp[i]], axis=1)
     return graph_data
 
 def display_graph(graph_data):
     figure = go.Figure()
-    figure.add_trace(go.Scatter(
-        x=graph_data["Date"],
-        y=graph_data[graph_data.columns[-1]],
-        name = graph_data.columns[-1],
-        showlegend=True
-    ))
+    symbols = graph_data.columns[1:]
+    for i in symbols:
+        figure.add_trace(go.Scatter(
+            x=graph_data["Date"],
+            y=graph_data[i],
+            name = i,
+            showlegend=True
+        ))
     figure.update_layout(
         xaxis_title = "Date",
         yaxis_title = "Stock Value"
     )
-
+    return figure
 
 def on_change(state, name, value):
     if name == "country":
@@ -154,7 +176,7 @@ build_company_names_cfg= Config.configure_task(
     input = country_cfg,
     output = company_names_cfg,
     function = build_company_names,
-    id = "build_company_name",
+    id = "build_company_names",
     skippable = True
 )
 
@@ -169,7 +191,7 @@ build_graph_data_cfg= Config.configure_task(
 
 scenario_cfg = Config.configure_scenario(
     task_configs=[build_company_names_cfg,
-                  build_graph_data_cfg],
+                build_graph_data_cfg],
     id = "scenario"
 )
 
